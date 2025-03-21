@@ -1,0 +1,21 @@
+
+python3 preprocessing/pretreatment_casiab_of.py --input_path ./data/casiab/silhouettes --input_path_rgb ./data/casiab/rgb --output_path ./data/casiab/of --worker_num 16
+
+python3 preprocessing/generate_of_dataset_casiab.py --ofdir ./data/casiab/of --outdir ./data/casiab/ofdataset/
+
+python3 preprocessing/generate_of_dataset_casiab_test.py --ofdir ./data/casiab/of --outdir ./data/casiab/ofdataset/ --mode ft
+
+python3 preprocessing/generate_of_dataset_casiab_test.py --ofdir ./data/casiab/of --outdir ./data/casiab/ofdataset/ --mode test
+
+Training
+python3 mains/train.py --datadir=./data/casiab/ofdataset --experdir=./exp --nclasses=74 --epochs=8000 --extraepochs=1000 --pk --p 8 --k 8 --lr=0.0005 --attention_drop_rate=0.1 --softmax_attention --kernel_regularizer --prefix=attengait_casiab --lr_sched --cross_weight=1.0 --split_crossentropy --combined_output_length=32
+
+Testing
+python3 mains/test.py --datadir=./data/casiab/ofdataset --knn 1 --nclasses 50 --allcameras --model EXPERPATH/EXPERFOLDER/model-final.hdf5 --bs 1 --cross_weight=1.0 --split_crossentropy --softmax_attention --combined_output_length=32
+
+
+
+
+
+my side
+CUDA_VISIBLE_DEVICES=5 python3 preprocessing/generate_of_dataset_casiab.py --ofdir /data/allam/wicak/ofdataset/tfimdb_casiab_N074_train_of30_64x64/ --outdir /data/allam/wicak/outputof

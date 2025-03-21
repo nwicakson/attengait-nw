@@ -15,6 +15,7 @@ else:
 
 # --------------------------------
 import tensorflow as tf
+import tensorflow.python.keras.backend as K
 
 theSEED = 232323
 tf.random.set_seed(theSEED)
@@ -31,7 +32,7 @@ graph.as_default()
 #
 session = tf.compat.v1.Session(graph=graph, config=config)
 session.as_default()
-tf.compat.v1.keras.backend.set_session(session)
+K.set_session(session)
 # --------------------------------
 
 from tensorflow.keras import optimizers
@@ -135,7 +136,9 @@ def trainGaitNet(datadir="matimdbtum_gaid_N150_of25_60x60_lite", experfix="of", 
 	if reduction != 'both':
 		infix = infix + "red_max"
 
-	if model_size == "small":
+	if model_size == "tiny":
+		n_filters = [16, 32, 64, 128]
+	elif model_size == "small":
 		n_filters = [32, 64, 128, 256]
 	elif model_size == "medium":
 		n_filters = [64, 128, 256, 256]
@@ -266,8 +269,22 @@ def trainGaitNet(datadir="matimdbtum_gaid_N150_of25_60x60_lite", experfix="of", 
 	else:
 		if multi_gpu > 0:
 			strategy = tf.distribute.MirroredStrategy()
-			with strategy.scope():
-				model.build(input_shape=input_shape, optimizer=optimfun, margin=margin,
+		else:
+			# Default strategy for single GPU/CPU
+			strategy = tf.distribute.get_strategy()
+		with strategy.scope():
+			# Move ALL model building code inside this block
+			if multi_gpu > 0:
+				# Multi-GPU specific settings
+				# Apply dataset options BEFORE distribution
+				options = tf.data.Options()
+				options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.DATA
+				# Apply to original dataset
+				original_dataset = train_generator.dataset.with_options(options)
+				# THEN distribute
+				train_generator.dataset = strategy.experimental_distribute_dataset(original_dataset)
+		
+			model.build(input_shape=input_shape, optimizer=optimfun, margin=margin,
 							softmax_attention=softmax_attention, dropout=dropout, weight_decay=weight_decay,
 							attention_drop_rate=attention_drop_rate, crossentropy_weight=cross_weight,
 							nclasses=nclasses, norm_triplet_loss=norm_triplet_loss,
@@ -276,19 +293,7 @@ def trainGaitNet(datadir="matimdbtum_gaid_N150_of25_60x60_lite", experfix="of", 
 							shared_weights_crossentropy=shared_weights_crossentropy, n_filters=n_filters,
 							adaptative_loss=adaptative_triplet_loss, reduction=reduction,
 							combined_output_length=combined_output_length)
-		else:
-			model.build(input_shape=input_shape, optimizer=optimfun, margin=margin,
-						softmax_attention=softmax_attention, dropout=dropout, weight_decay=weight_decay,
-						attention_drop_rate=attention_drop_rate, crossentropy_weight=cross_weight,
-						nclasses=nclasses, norm_triplet_loss=norm_triplet_loss,
-						soft_triplet_loss=soft_triplet_loss, kernel_regularizer=kernel_regularizer,
-						split_crossentropy=split_crossentropy,
-						shared_weights_crossentropy=shared_weights_crossentropy, n_filters=n_filters,
-						adaptative_loss=adaptative_triplet_loss, reduction=reduction,
-						combined_output_length=combined_output_length)
-
-
-		model.model.summary()
+			model.model.summary()
 
 		if init_net != "":
 			model.model.load_weights(init_net, by_name=True, skip_mismatch=True)
@@ -314,13 +319,13 @@ def trainGaitNet(datadir="matimdbtum_gaid_N150_of25_60x60_lite", experfix="of", 
 		# --------------------------------------
 		if verbose > 1:
 			print(experdir)
-
+		"""
 		if multi_gpu:
 			options = tf.data.Options()
 			options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.DATA
 			train_generator.dataset = train_generator.dataset.with_options(options)
 			train_generator.dataset = strategy.experimental_distribute_dataset(train_generator.dataset)
-
+		"""
 		with strategy.scope():
 			def compute_loss(labels, predictions, global_batch_size, weights):
 				losses = []
@@ -362,11 +367,13 @@ def trainGaitNet(datadir="matimdbtum_gaid_N150_of25_60x60_lite", experfix="of", 
 		# ---------------------------------------
 		# Train loop
 		# ---------------------------------------
+		# Train loop
 		iterator = iter(train_generator.dataset)
 		extra_epochs_done = False
 
 		for epoch in range(initepoch, epochs + extra_epochs):
-			epoch_losses = np.zeros(len(model.losses))
+			num_losses = len(model.losses) + (1 if model.model.losses else 0)
+			epoch_losses = np.zeros(num_losses)
 			total_losses = 0
 			print("\nStart of epoch %d" % (epoch,))
 			start_time = time.time()
@@ -380,24 +387,24 @@ def trainGaitNet(datadir="matimdbtum_gaid_N150_of25_60x60_lite", experfix="of", 
 				x_batch_train, y_batch_train = next(iterator)
 				if multi_gpu > 0:
 					loss_value, per_replica_losses = distributed_train_step(x_batch_train, y_batch_train, batchsize,
-					                                                        model.losses_weights)
+																			model.losses_weights)
 					if len(model.losses) > 1:
 						for loss_ix in range(len(model.losses)):
 							epoch_losses[loss_ix] = epoch_losses[loss_ix] + strategy.reduce(tf.distribute.ReduceOp.SUM,
-							                                                                per_replica_losses[loss_ix],
-							                                                                axis=None)
+																							per_replica_losses[loss_ix],
+																							axis=None)
 					else:
 						epoch_losses[0] = loss_value
 				else:
 					loss_value, losses = train_step(x_batch_train, y_batch_train, batchsize, model.losses_weights)
-					if len(model.losses) > 1:
+					if num_losses > 1:
 						epoch_losses = epoch_losses + np.asarray(losses)
 
 				total_losses = total_losses + loss_value
 				iters = iters + 1
 
 				if step % 10 == 0:
-					if len(epoch_losses) > 1:
+					if num_losses > 1:
 						epoch_losses_ = np.insert(epoch_losses, 0, total_losses)
 					else:
 						epoch_losses_ = epoch_losses
@@ -620,4 +627,3 @@ if __name__ == "__main__":
 			final_model.model.save(os.path.join(experdir, "model-final.hdf5"), include_optimizer=False)
 
 	print("* End of training: {}".format(experdir))
-

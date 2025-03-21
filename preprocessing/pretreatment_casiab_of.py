@@ -36,6 +36,8 @@ parser.add_argument('--log', default=False, type=boolean_string,
 parser.add_argument('--worker_num', default=1, type=int,
 					help='How many subprocesses to use for data pretreatment. '
 						 'Default: 1')
+parser.add_argument('--sum_sil', default=10000, type=int,
+					help='Sum of white silhouettes. ')
 opt = parser.parse_args()
 
 INPUT_PATH = opt.input_path
@@ -44,10 +46,10 @@ OUTPUT_PATH = opt.output_path
 IF_LOG = opt.log
 LOG_PATH = opt.log_file
 WORKERS = opt.worker_num
+SUM_SIL = opt.sum_sil
 
 T_H = 64
 T_W = 64
-
 
 def log2str(pid, comment, logs):
 	str_log = ''
@@ -57,7 +59,6 @@ def log2str(pid, comment, logs):
 		str_log += "# JOB %d : --%s-- %s\n" % (
 			pid, comment, log)
 	return str_log
-
 
 def log_print(pid, comment, logs):
 	str_log = log2str(pid, comment, logs)
@@ -69,23 +70,24 @@ def log_print(pid, comment, logs):
 			return
 	print(str_log, end='')
 
-
 def cut_img(img, flow, seq_info, frame_name, pid):
 	# A silhouette contains too little white pixels
 	# might be not valid for identification.
-	if img.sum() <= 10000:
+	if img.sum() <= SUM_SIL:
 		message = 'seq:%s, frame:%s, no data, %d.' % (
 			'-'.join(seq_info), frame_name, img.sum())
 		warn(message)
 		log_print(pid, WARNING, message)
 		return None
-	# Get the top and bottom point
+	
+ 	# Get the top and bottom point
 	y = img.sum(axis=1)
 	y_top = (y != 0).argmax(axis=0)
 	y_btm = (y != 0).cumsum(axis=0).argmax(axis=0)
 	flow = flow[y_top:y_btm + 1, :, :]
 	img = img[y_top:y_btm + 1, :]
-	# As the height of a person is larger than the width,
+	
+ 	# As the height of a person is larger than the width,
 	# use the height to calculate resize ratio.
 	_r = flow.shape[1] / flow.shape[0]
 	_t_w = int(T_H * _r)
@@ -93,7 +95,8 @@ def cut_img(img, flow, seq_info, frame_name, pid):
 	_r = img.shape[1] / img.shape[0]
 	_t_w = int(T_H * _r)
 	img = cv2.resize(img, (_t_w, T_H), interpolation=cv2.INTER_CUBIC)
-	# Get the median of x axis and regard it as the x center of the person.
+	
+ 	# Get the median of x axis and regard it as the x center of the person.
 	sum_point = img.sum()
 	sum_column = img.sum(axis=0).cumsum()
 	x_center = -1
@@ -101,6 +104,8 @@ def cut_img(img, flow, seq_info, frame_name, pid):
 		if sum_column[i] > sum_point / 2:
 			x_center = i
 			break
+	
+ 	# Prevents processing of poorly centered figures
 	if x_center < 0:
 		message = 'seq:%s, frame:%s, no center.' % (
 			'-'.join(seq_info), frame_name)
@@ -115,7 +120,7 @@ def cut_img(img, flow, seq_info, frame_name, pid):
 		right += h_T_W
 		_ = np.zeros((img.shape[0], h_T_W, 3))
 		flow = np.concatenate([_, flow, _], axis=1)
-
+	
 	flow = flow[:, left:right, :]
 	return flow.astype('float16')
 
@@ -133,22 +138,31 @@ def cut_pickle(seq_info, pid):
 	for _frame_name in frame_list:
 		frame_path = os.path.join(seq_path, _frame_name)
 		frame_path_rgb = os.path.join(seq_path_rgb, _frame_name)
-		img = cv2.imread(frame_path, cv2.IMREAD_GRAYSCALE)
-		img_gray = cv2.imread(frame_path_rgb, cv2.IMREAD_GRAYSCALE)
+		img = cv2.imread(frame_path, cv2.IMREAD_GRAYSCALE)					#silhouettes
+		img_gray = cv2.imread(frame_path_rgb, cv2.IMREAD_GRAYSCALE)			#rgb to grey images
+		
+  		# Optical Flow Generation
+		#Skip OF if there is no silhoutte from t-1 (skip the first silhouette)
 		if prev_img is not None:
+			#OF = Calc difference between frame t and t-1 of grey image
 			flow = cv2.calcOpticalFlowFarneback(prev_img, img_gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
 			flow = flow2rgb(flow) * 255
 			flow = flow.astype(np.uint8)
+			#Mask to get cropped / standard OF
+			#cut_img return flow = None if the silhouette is not valid such as sum of white pixels <= SUM_SIL
 			flow = cut_img(img, flow, seq_info, _frame_name, pid)
 		else:
 			flow = None
+
 		prev_img = img_gray
+  
 		if flow is not None:
 			# Save the cut img
 			_frame_name_parts = _frame_name.split(".")
 			save_path = os.path.join(out_dir, _frame_name_parts[0] + ".png")
 			cv2.imwrite(save_path, flow)
 			count_frame += 1
+   
 	# Warn if the sequence contains less than 5 frames
 	if count_frame < 5:
 		message = 'seq:%s, less than 5 valid data.' % (
@@ -161,7 +175,7 @@ def cut_pickle(seq_info, pid):
 			  % (count_frame, out_dir))
 
 
-pool = Pool(WORKERS)
+pool = Pool(WORKERS)#
 results = list()
 pid = 0
 

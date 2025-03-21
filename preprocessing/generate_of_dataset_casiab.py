@@ -2,11 +2,21 @@ import cv2
 import numpy as np
 import argparse
 import os
-import deepdish as dd
+import warnings
 import glob
 
-np.object = object    # Fix for deepdish
+# Fix for numpy versions where ComplexWarning is missing
+if not hasattr(np, 'ComplexWarning'):
+    class ComplexWarning(Warning):
+        pass
+    np.ComplexWarning = ComplexWarning
 
+# Fix for deepdish expecting np.object
+np.object = object  # Required for deepdish compatibility
+
+import deepdish as dd
+
+#Load video from set of frames
 def loadVideo(video_path):
 	frame_list = sorted(glob.glob(os.path.join(video_path, '*.png')))
 	if len(frame_list) > 0:
@@ -49,19 +59,22 @@ frames_ = []
 bbs_ = []
 file_ = []
 cams_ = []
-meanSample = np.zeros((64,64,3), dtype=np.float32)
+meanSample = np.zeros((64,64,3), dtype=np.float32) #OF dimension
 
-# Subjects loop
+# Subjects loop from OF folder
 id_folders = sorted(glob.glob(os.path.join(ofdir, '*/')))
-folder_dir = 'tfimdb_casiab_N074_train_of' + str(30) + '_64x64'
+folder_dir = 'tfimdb_casiab_N074_train_of' + str(30) + '_64x64'  	#30 FPS?
 os.makedirs(os.path.join(outdir, folder_dir), exist_ok=True)
 
+#Subjects = 124
 for id_ix in id_folders:
+    
+    # Subject <= 74
 	if int(id_ix.split('/')[-2]) <= 74:
-		# Video loop
+		# Video loop for Scenarios
 		video_folders = glob.glob(os.path.join(id_ix, '*/'))
 		for video_ix in video_folders:
-			# Camera loop
+			# Camera loop for Views
 			camera_folders = glob.glob(os.path.join(video_ix, '*/'))
 			for camera_ix in camera_folders:
 				# Load files.
@@ -122,7 +135,7 @@ data['frames'] = frames_
 data['bbs'] = bbs_
 data['compressFactor'] = np.uint8(0)
 data['file'] = file_
-data['shape'] = (60, 60, 30)
+data['shape'] = (60, 60, 30)	#???
 data['mean'] = meanSample / np.float32(len(labels_))
 outpath = os.path.join(outdir, folder_dir + '.h5')
 dd.io.save(outpath, data)
